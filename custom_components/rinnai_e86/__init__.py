@@ -87,8 +87,17 @@ button.refresh{padding:6px 16px;border-radius:8px;border:1px solid var(--line);b
 </div>
 <div class="foot" id="foot">rinnai_e86 · HA 内置面板</div>
 <script>
+function authToken(){try{
+for(const k of Object.keys(localStorage)){
+const v=localStorage[k];if(!v||v.length<20)continue;
+try{const o=JSON.parse(v);
+if(o&&typeof o==='object'){
+if(o.access_token)return o.access_token;
+if(o.auth&&o.auth.access_token)return o.auth.access_token;}}catch(e){}}
+return '';}catch(e){return ''}}
 async function post(cmd,value){try{
-await fetch('/api/rinnai_e86/cmd',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({cmd,value})});
+const t=authToken();
+await fetch('/api/rinnai_e86/cmd',{method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+t},body:JSON.stringify({cmd,value})});
 setTimeout(load,4500);}catch(e){}}
 function row(k,v){return `<div class="row"><span class="k">${k}</span><span>${v}</span></div>`}
 function ago(t){if(!t)return '--';const s=Math.floor(Date.now()/1000-t);return s<120?s+' 秒前':Math.floor(s/60)+' 分钟前'}
