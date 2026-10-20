@@ -113,8 +113,8 @@ row('燃烧次数',s.burn_count??'--')+row('累计燃烧',s.burn_min?s.burn_min+
 row('累计通电',s.power_min?s.power_min+' 分':'--');
 const i=s.identity||{};
 document.getElementById('info').innerHTML=
-row('型号','RUS-E86 ('+(i.id||'-')+')')+row('模块固件',i.wifisoftversion||'V14')+
-row('序列号', s.serial || '-');
+row('型号','RUS-E86 ('+(i.id||'02720E86')+')')+row('模块固件',i.wifisoftversion||'V14')+
+row('序列号','289C6E144006');
 document.getElementById('foot').textContent=(s.online?'在线':'离线')+' · '+new Date().toLocaleTimeString();
 }catch(e){document.getElementById('dot').className='dot';}}
 load();setInterval(load,3000);
@@ -245,14 +245,9 @@ def ensure_cert(hass: HomeAssistant) -> tuple[str, str]:
 class RinnaiHub:
     """热水器假云端 + 状态源(可选桥接真云让林内App可用)。"""
 
-    def __init__(self, hass: HomeAssistant, bridge_cloud: bool = True,
-                 topic_base: str = "", device_id: str = "",
-                 product_id: str = "") -> None:
+    def __init__(self, hass: HomeAssistant, bridge_cloud: bool = True) -> None:
         self.hass = hass
         self.bridge_cloud = bridge_cloud
-        self.topic_base = topic_base.rstrip("/")
-        self.device_id = device_id
-        self.product_id = product_id
         self.writer: asyncio.StreamWriter | None = None
         self._sessions: dict = {}  # device_writer -> cloud_writer(成对清理)
         self.raw: dict = {}
@@ -277,7 +272,6 @@ class RinnaiHub:
             "temp_setting_c": _hx(s.get("hotWaterTempSetting")),
             "burning": s.get("burningState") not in (None, "0"),
             "faucet": s.get("faucetNotCloseSign") not in (None, "0"),
-            "serial": self.device_id,
             "cycle_mode": (
                 _hx(s.get("cycleModeSetting"), 0)
                 or (1 if s.get("temporaryCycleInsulationSetting") not in (None, "0") else 0)
@@ -319,9 +313,9 @@ class RinnaiHub:
 
     async def query(self) -> None:
         payload = json.dumps(
-            {"deviceid": self.device_id, "id": self.product_id, "ptn": "JA0"}
+            {"deviceid": DEVICE_ID, "id": PRODUCT_ID, "ptn": "JA0"}
         ).encode()
-        self._send(_publish1(f"{self.topic_base}/get/", payload, self._next_id()))
+        self._send(_publish1(f"{TOPIC_BASE}/get/", payload, self._next_id()))
 
     async def set_field(self, field: str, data_hex: str) -> None:
         await self._set_fields([(field, data_hex)])
@@ -343,12 +337,12 @@ class RinnaiHub:
                 {
                     "code": "03E9",
                     "enl": [{"data": dh, "id": f} for f, dh in items],
-                    "id": self.product_id,
+                    "id": PRODUCT_ID,
                     "ptn": "J00",
                     "sum": str(len(items)),
                 }
             ).encode()
-            self._send(_publish1(f"{self.topic_base}/set/", payload, self._next_id()))
+            self._send(_publish1(f"{TOPIC_BASE}/set/", payload, self._next_id()))
             _LOGGER.info("下发 set %s", items)
 
     async def safe_set_cycle(self, value: int) -> None:
@@ -591,7 +585,7 @@ class RinnaiHub:
             answer = json.dumps(
                 {"ptn": "JA5", "epoch": int(time.time()), "timezone": "+08:00"}
             ).encode()
-            self._send(_publish0(f"{self.topic_base}/set/", answer))
+            self._send(_publish0(f"{TOPIC_BASE}/set/", answer))
             return
         if ptn == "J00" and "enl" in obj:
             self.raw = {e.get("id", "?"): e.get("data", "") for e in obj["enl"]}
@@ -649,25 +643,31 @@ class RinnaiHub:
 
 from aiohttp import web
 
-from homeassistant.components.http import HomeAssistantView
+from homeassistant.components.http import HomeAssistantView, KEY_HASS
+
+
+
 
 
 class _PanelView(HomeAssistantView):
     url = "/api/rinnai_e86/panel"
     name = "api:rinnai_e86:panel"
-    requires_auth = False  # 局域网页面板,与旧 Mac 面板同等开放度
+    requires_auth = True  # HA原生认证;局域网浏览器登录态/长期令牌均可用
 
     async def get(self, request):
         return web.Response(text=PANEL_HTML, content_type="text/html")
 
 
+
+
 class _StatusView(HomeAssistantView):
     url = "/api/rinnai_e86/status"
     name = "api:rinnai_e86:status"
-    requires_auth = False
+    requires_auth = True  # HA原生认证;局域网浏览器登录态/长期令牌均可用
 
     async def get(self, request):
-        hub = request.app["hass"].data.get(DOMAIN, {}).get("hub")
+        hass = request.app[KEY_HASS]
+        hub = hass.data.get(DOMAIN, {}).get("hub")
         if hub is None:
             return web.json_response({"online": False})
         d = hub.friendly()
@@ -680,10 +680,10 @@ class _StatusView(HomeAssistantView):
 class _CmdView(HomeAssistantView):
     url = "/api/rinnai_e86/cmd"
     name = "api:rinnai_e86:cmd"
-    requires_auth = False
+    requires_auth = True  # HA原生认证;局域网浏览器登录态/长期令牌均可用
 
     async def post(self, request):
-        hass = request.app["hass"]
+        hass = request.app[KEY_HASS]
         hub = hass.data.get(DOMAIN, {}).get("hub")
         if hub is None:
             return web.json_response({"ok": False, "error": "未就绪"}, status=503)
@@ -707,16 +707,7 @@ class _CmdView(HomeAssistantView):
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     if DOMAIN not in hass.data:
         hass.data[DOMAIN] = {"voice_light": VOICE_LIGHT_DEFAULT}
-    opts = {**entry.data, **entry.options}
-    hub = RinnaiHub(
-        hass,
-        bridge_cloud=opts.get("bridge_cloud", True),
-        topic_base=opts.get("topic_base", ""),
-        device_id=opts.get("device_id", ""),
-        product_id=opts.get("product_id", ""),
-    )
-    hass.data[DOMAIN]["voice_light"] = opts.get("voice_light", "")
-    hass.data[DOMAIN]["virtual_event"] = opts.get("virtual_event", "")
+    hub = RinnaiHub(hass, bridge_cloud=entry.options.get("bridge_cloud", True))
     hass.data[DOMAIN]["hub"] = hub
     await hub.start()
 
