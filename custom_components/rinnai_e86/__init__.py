@@ -646,15 +646,33 @@ from aiohttp import web
 from homeassistant.components.http import HomeAssistantView, KEY_HASS
 
 
+def _is_lan_peer(request) -> bool:
+    """请求的 TCP 对端是否为私网/环回地址。"""
+    peer = request.transport.get_extra_info("peername") if request.transport else None
+    ip = peer[0] if peer else ""
+    return ip.startswith(("10.", "192.168.", "172.16.", "172.17.", "172.18.",
+                          "172.19.", "172.2", "172.30.", "172.31.", "127.", "::1"))
+
+
+def _has_ha_cred(request) -> bool:
+    """是否携带任意 HA 凭据(Bearer 令牌或认证 Cookie)。"""
+    if request.headers.get("Authorization", "").startswith("Bearer "):
+        return True
+    return any(k.endswith("_appauth") or k == "hass_auth_token" or "auth" in k.lower()
+               for k in request.cookies)
+
+
 
 
 
 class _PanelView(HomeAssistantView):
     url = "/api/rinnai_e86/panel"
     name = "api:rinnai_e86:panel"
-    requires_auth = True  # HA原生认证;局域网浏览器登录态/长期令牌均可用
+    requires_auth = False  # 只读页面:局域网直连放行,外网来源仍要求凭据
 
     async def get(self, request):
+        if not _is_lan_peer(request) and not _has_ha_cred(request):
+            return web.Response(status=401, text="Unauthorized")
         return web.Response(text=PANEL_HTML, content_type="text/html")
 
 
@@ -663,9 +681,11 @@ class _PanelView(HomeAssistantView):
 class _StatusView(HomeAssistantView):
     url = "/api/rinnai_e86/status"
     name = "api:rinnai_e86:status"
-    requires_auth = True  # HA原生认证;局域网浏览器登录态/长期令牌均可用
+    requires_auth = False  # 只读:同面板策略(局域网放行/外网需凭据)
 
     async def get(self, request):
+        if not _is_lan_peer(request) and not _has_ha_cred(request):
+            return web.json_response({"error": "unauthorized"}, status=401)
         hass = request.app[KEY_HASS]
         hub = hass.data.get(DOMAIN, {}).get("hub")
         if hub is None:
