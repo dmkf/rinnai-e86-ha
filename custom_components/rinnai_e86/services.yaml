@@ -1,0 +1,18 @@
+cycle:
+  name: 设置循环模式
+  description: 下发零冷水循环模式(需设备在线)
+  fields:
+    value:
+      name: 模式
+      description: 0=关闭 1=单次循环 2=全天循环
+      required: true
+      example: "1"
+      selector:
+        select:
+          options:
+            - "0"
+            - "1"
+            - "2"
+query:
+  name: 查询状态
+  description: 触发设备立即上报全量状态

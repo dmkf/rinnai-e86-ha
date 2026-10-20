@@ -1,0 +1,13 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "添加林内E86热水器本地集成(需网关将热水器出站8883 DNAT到本机)",
+        "data": {}
+      }
+    },
+    "abort": {
+      "already_configured": "已配置"
+    }
+  }
+}

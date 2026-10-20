@@ -1,0 +1,10 @@
+{
+  "domain": "rinnai_e86",
+  "name": "Rinnai E86 Water Heater",
+  "version": "1.0.0",
+  "documentation": "https://github.com/",
+  "codeowners": ["@zhiyong"],
+  "config_flow": true,
+  "iot_class": "local_polling",
+  "integration_type": "hub"
+}
