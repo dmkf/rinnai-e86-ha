@@ -127,6 +127,22 @@ row('序列号','289C6E144006');
 document.getElementById('foot').textContent=(s.online?'在线':'离线')+' · '+new Date().toLocaleTimeString();
 }catch(e){document.getElementById('dot').className='dot';}}
 load();setInterval(load,3000);
+// ---- 诊断:枚举localStorage找HA令牌 ----
+(function(){
+const out=[];
+for(const k of Object.keys(localStorage)){
+const v=localStorage[k];
+let hint=(v&&v.length>20)?('len='+v.length):v;
+try{const o=JSON.parse(v);
+if(o&&typeof o==='object'){
+hint+=' keys:['+Object.keys(o).join(',')+']';
+if(o.access_token)hint+=' [HAS access_token]';
+if(o.auth)hint+=' [auth wrapper]';
+}}catch(e){hint+=' (non-json)'}
+out.push(k+' -> '+hint);}
+const el=document.getElementById('foot');
+if(el)el.innerHTML='<span style="font-size:10px;text-align:left;display:block;white-space:pre-wrap">'+(out.join('\n')||'localStorage empty')+'</span>';
+})();
 </script></body></html>"""
 
 # ---------- MQTT 基础编解码 ----------
@@ -381,7 +397,32 @@ class RinnaiHub:
         else:  # 全天循环(极少用)仍走 cycleMode 通道
             await self.set_field("cycleModeSetting", f"{value:02X}")
 
+    async def _stats_bootstrap(self) -> None:
+        """启动后若统计为空,踢一次会话让设备重连重走舞步(统计只在会话建立时上报)。"""
+        try:
+            for attempt in range(3):
+                await asyncio.sleep(10)
+                if self.stats:
+                    _LOGGER.info("统计已就绪,无需bootstrap")
+                    return
+                w = self.writer
+                if w is None:
+                    _LOGGER.info("bootstrap: 设备未连接,等待下轮")
+                    continue
+                _LOGGER.info("bootstrap 第%d次: 重置会话触发统计上报", attempt + 1)
+                w.close()
+                await asyncio.sleep(25)
+                if self.stats:
+                    _LOGGER.info("bootstrap 成功,统计已获取")
+                    return
+            _LOGGER.warning("bootstrap 三轮后统计仍缺失(设备未报J05,不影响核心功能)")
+        except Exception:  # noqa: BLE001
+            _LOGGER.exception("stats bootstrap 异常")
+
     async def _poll_loop(self) -> None:
+        if not self.stats:
+            self.hass.async_create_background_task(
+                self._stats_bootstrap(), "rinnai_e86 stats bootstrap")
         while True:
             await asyncio.sleep(POLL_SECONDS)
             stale = time.time() - self.last_seen if self.last_seen else 0
@@ -600,7 +641,13 @@ class RinnaiHub:
             self.raw = {e.get("id", "?"): e.get("data", "") for e in obj["enl"]}
             self.last_seen = time.time()
         elif ptn == "J05" and "egy" in obj:
-            self.stats = {e.get("label", "?"): e.get("value", "") for e in obj["egy"]}
+            merged = dict(self.stats)
+            for e in obj["egy"]:
+                if "label" in e:
+                    merged[e["label"]] = e.get("value", "")
+                else:
+                    merged.update(e)  # stg版J05是直接{key:value}形态
+            self.stats = merged
             self.last_seen = time.time()
         elif ptn == "JA0":
             self.identity = obj
@@ -766,6 +813,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             return
         if old is not None and old.state == new.state:
             return
+        if old is None:
+            return  # 启动时实体状态恢复重放,不执行
         name = new.attributes.get("事件名称")
         if name == "cycle_on":
             _LOGGER.info("虚拟事件 cycle_on → 启动循环")
